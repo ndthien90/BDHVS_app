@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ứng Dụng Tạo Đề Thi Trắc Nghiệm từ Excel/CSV</title>
+    <!-- Tải Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tải thư viện xử lý Excel (SheetJS) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- Cấu hình Font và Style -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            /* Thêm các font hệ thống phổ biến có hỗ trợ tiếng Việt làm font dự phòng */
+            font-family: 'Inter', 'Arial', 'Tahoma', 'Verdana', sans-serif;
+            background-color: #f3f4f6;
+        }
+        /* Style cho đáp án đúng khi hiển thị */
+        .correct-choice {
+            background-color: #d1fae5 !important; /* green-100 */
+            border-color: #10b981 !important; /* green-500 */
+            font-weight: 600;
+        }
+        /* Style cho nút đã được sử dụng */
+        .answered-btn {
+            background-color: #9ca3af !important; /* gray-400 */
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        /* Fix panel điều hướng dính ở trên cùng khi cuộn */
+        #nav-panel {
+            position: sticky;
+            top: 1rem; /* Khoảng cách từ trên cùng */
+            max-height: calc(100vh - 2rem);
+            overflow-y: auto;
+        }
+        /* Style cho nút điều hướng câu hỏi */
+        .nav-btn {
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        .nav-btn:hover {
+            transform: scale(1.05);
+        }
+        
+        /* NEW: Câu trả lời đã được chọn, chờ chấm (Màu xanh lam) */
+        .nav-btn.pending-answer {
+            background-color: #3b82f6; /* blue-500 */
+            color: white;
+            border-color: #3b82f6;
+        }
+
+        /* Câu trả lời ĐÚNG (Sau khi nhấn Xem Đáp Án) */
+        .nav-btn.answered {
+            background-color: #10b981; /* green-500 */
+            color: white;
+            border-color: #10b981;
+        }
+        .nav-btn.unanswered {
+            background-color: #ffffff;
+            color: #1f2937; /* gray-800 */
+            border-color: #d1d5db; /* gray-300 */
+        }
+        /* Câu trả lời SAI (Sau khi nhấn Xem Đáp Án) */
+        .nav-btn.wrong {
+            background-color: #ef4444; /* red-500 */
+            color: white;
+            border-color: #ef4444;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+    <div id="app" class="max-w-7xl mx-auto bg-white shadow-xl rounded-xl p-6 sm:p-10">
+
+        <!-- Header -->
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-blue-700 mb-6 text-center">
+            Tạo Đề Thi Trắc Nghiệm Tự Động
+        </h1>
+        <p class="text-center text-gray-600 mb-8">
+            Vui lòng tải lên **nhiều** file **Excel (.xlsx/.xls)** hoặc **CSV** theo cấu trúc đã cung cấp.
+        </p>
+        <hr class="mb-8">
+
+        <!-- Message Box for Alerts (Replaces alert()) -->
+        <div id="message-box" class="fixed top-4 right-4 z-50 transition-opacity duration-300 opacity-0 pointer-events-none">
+        </div>
+
+        <!-- 1. Upload View -->
+        <div id="upload-view">
+            <label for="csv-file" class="block text-lg font-medium text-gray-700 mb-3">
+                Chọn File Dữ Liệu Thi (Excel/CSV)
+            </label>
+            <!-- Cho phép chọn nhiều file CSV, XLSX và XLS -->
+            <input type="file" id="csv-file" accept=".csv, .xlsx, .xls" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+
+            <div class="mt-8 p-4 bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 rounded-lg">
+                <h3 class="font-bold text-lg mb-2">Lưu ý về Cấu trúc Dữ liệu</h3>
+                <ul class="list-disc list-inside space-y-1 text-sm">
+                    <li>File có thể là **Excel (.xlsx/.xls)** hoặc **CSV**.</li>
+                    <li>Chương trình sẽ đọc sheet đầu tiên của mỗi file Excel.</li>
+                    <li>**Cột 1 (A)**: Nội dung Câu hỏi.</li>
+                    <li>**Cột 2 (B)**: Đáp án Đúng (Ví dụ: "1", "2", "134". Là vị trí của đáp án, bắt đầu từ 1).</li>
+                    <li>**Cột 3-10 (C-J)**: Nội dung các Phương án lựa chọn 1 đến 8.</li>
+                    <li>Chương trình sẽ tự động bỏ qua các dòng Header (nếu có) không phải là câu hỏi hợp lệ.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 2. Quiz View -->
+        <div id="quiz-view" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                
+                <!-- Bảng điều hướng câu hỏi (Left Panel) -->
+                <div id="nav-panel" class="lg:col-span-1 p-4 border border-gray-200 rounded-lg shadow-md bg-gray-50">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">Danh sách Câu hỏi</h3>
+                    
+                    <!-- Search Input -->
+                    <div class="mb-4">
+                        <input type="text" id="search-input" placeholder="Tìm kiếm câu hỏi..." class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+
+                    <div id="nav-container" class="grid grid-cols-5 sm:grid-cols-6 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                        <!-- Navigation buttons will be rendered here -->
+                    </div>
+                </div>
+
+                <!-- Nội dung Bài thi (Right Content) -->
+                <div id="quiz-content" class="lg:col-span-3">
+                    <div id="quiz-container">
+                        <!-- Questions will be rendered here -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-10 pt-6 border-t border-gray-200 flex justify-center">
+                <button id="submit-quiz" class="px-8 py-3 bg-green-600 text-white font-bold rounded-lg shadow-lg hover:bg-green-700 transition duration-300 transform hover:scale-[1.02]">
+                    Nộp Bài và Chấm Điểm
+                </button>
+            </div>
+        </div>
+
+        <!-- 3. Results View -->
+        <div id="results-view" class="hidden">
+            <h2 class="text-3xl font-bold text-center text-green-700 mb-6">Kết Quả Bài Thi</h2>
+            <div class="space-y-4">
+                <div id="score-display" class="p-5 bg-green-50 rounded-lg text-center shadow-md">
+                    <p class="text-xl font-semibold text-gray-700">Tổng số câu hỏi: <span id="total-questions" class="text-2xl font-bold text-green-800"></span></p>
+                    <p class="text-xl font-semibold text-gray-700 mt-2">Số câu trả lời đúng: <span id="correct-answers" class="text-3xl font-bold text-green-800"></span></p>
+                </div>
+
+                <div id="review-container">
+                    <!-- Review details will be rendered here -->
+                </div>
+
+                <div class="flex justify-center pt-6">
+                    <button id="restart-quiz" class="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
+                        Làm Bài Thi Mới
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- CONSTANTS AND STATE ---
+        const STATE = {
+            UPLOAD: 'upload',
+            QUIZ: 'quiz',
+            RESULTS: 'results'
+        };
+
+        let currentViewState = STATE.UPLOAD;
+        let quizData = [];
+        let userAnswers = {};
+        // Theo dõi câu hỏi đã được xem đáp án (chỉ dùng cho chế độ Quiz)
+        let revealedAnswers = {}; 
+
+        // --- DOM Elements ---
+        const uploadView = document.getElementById('upload-view');
+        const quizView = document.getElementById('quiz-view');
+        const resultsView = document.getElementById('results-view');
+        const fileInput = document.getElementById('csv-file');
+        const submitButton = document.getElementById('submit-quiz');
+        const restartButton = document.getElementById('restart-quiz');
+        const quizContainer = document.getElementById('quiz-container');
+        const messageBox = document.getElementById('message-box');
+        const navContainer = document.getElementById('nav-container');
+        const searchInput = document.getElementById('search-input'); 
+
+        // --- UTILITY FUNCTIONS ---
+
+        /**
+         * Hiển thị thông báo tùy chỉnh (thay thế alert())
+         * @param {string} message - Nội dung thông báo
+         * @param {string} type - 'success', 'error', 'info'
+         */
+        function showMessage(message, type = 'info') {
+            const colors = {
+                'success': 'bg-green-500',
+                'error': 'bg-red-500',
+                'info': 'bg-blue-500'
+            };
+
+            const html = `
+                <div class="${colors[type]} text-white p-4 rounded-lg shadow-xl mb-2 max-w-sm">
+                    ${message}
+                </div>
+            `;
+            messageBox.innerHTML = html;
+            messageBox.style.opacity = '1';
+            messageBox.style.pointerEvents = 'auto';
+
+            setTimeout(() => {
+                messageBox.style.opacity = '0';
+                messageBox.style.pointerEvents = 'none';
+            }, 5000);
+        }
+
+        /**
+         * Chuyển đổi giữa các trạng thái xem (View State)
+         * @param {string} newState - Trạng thái mới (upload, quiz, results)
+         */
+        function setViewState(newState) {
+            currentViewState = newState;
+            uploadView.classList.add('hidden');
+            quizView.classList.add('hidden');
+            resultsView.classList.add('hidden');
+
+            switch (newState) {
+                case STATE.UPLOAD:
+                    uploadView.classList.remove('hidden');
+                    break;
+                case STATE.QUIZ:
+                    quizView.classList.remove('hidden');
+                    // Reset search input khi chuyển sang quiz view
+                    if (searchInput) {
+                        searchInput.value = '';
+                    }
+                    // Bắt đầu tìm kiếm ngay khi view được mở
+                    filterQuestions(); 
+                    break;
+                case STATE.RESULTS:
+                    resultsView.classList.remove('hidden');
+                    break;
+            }
+        }
+
+        /**
+         * Phân tích chuỗi CSV thành mảng các dòng và cột.
+         * @param {string} text - Nội dung file CSV
+         * @returns {Array<Array<string>>} Mảng 2 chiều của dữ liệu
+         */
+        function parseCSV(text) {
+            const rows = text.split('\n');
+            const data = [];
+
+            for (let i = 0; i < rows.length; i++) {
+                const line = rows[i].trim();
+                if (!line) continue;
+
+                // Regex để tách các trường: Tách theo dấu phẩy, bỏ qua dấu phẩy trong ngoặc kép
+                const columns = [];
+                let match = line.matchAll(/(?:"((?:[^"]|"")*)"|([^,]*))(?:,|$)/g);
+                let currentMatch;
+
+                while (!(currentMatch = match.next()).done) {
+                    const group = currentMatch.value;
+                    let cell = group[1] !== undefined ? group[1].replace(/""/g, '"') : group[2];
+                    if (cell === undefined) cell = ''; 
+                    columns.push(cell.trim());
+                }
+
+                // Cần đảm bảo có đủ 2 cột chính (Câu hỏi + Đáp án) để được xem xét
+                if (columns.length >= 2) {
+                    data.push(columns);
+                }
+            }
+            return data;
+        }
+
+        /**
+         * Chuyển đổi dữ liệu thô (CSV/XLSX) thành cấu trúc dữ liệu Quiz đã chuẩn hóa.
+         * @param {Array<Array<string>>} rawData - Dữ liệu thô từ CSV hoặc XLSX
+         */
+        function normalizeData(rawData) {
+            quizData = [];
+            userAnswers = {};
+            revealedAnswers = {}; // Reset trạng thái xem đáp án
+
+            let dataRows = rawData;
+            const initialRowCount = dataRows.length;
+            let validQuestionCount = 0;
+            let firstValidRowIndex = -1;
+
+            // 1. Tìm dòng đầu tiên có vẻ là câu hỏi hợp lệ (có nội dung ở Cột A và B)
+            for (let i = 0; i < dataRows.length; i++) {
+                const row = dataRows[i];
+                if (row && row.length >= 2) {
+                    const questionText = String(row[0] || '').trim();
+                    const correctAnswerString = String(row[1] || '').trim();
+                    
+                    if (questionText.length > 0 && correctAnswerString.length > 0) {
+                        firstValidRowIndex = i;
+                        break;
+                    }
+                }
+            }
+            
+            // Nếu tìm thấy, cắt bỏ các dòng header trước đó
+            if (firstValidRowIndex > 0) {
+                 dataRows = dataRows.slice(firstValidRowIndex);
+            }
+            
+            // Cập nhật lại rawData để phản ánh việc cắt bỏ header
+            // const effectiveRowCount = dataRows.length; // Dùng effectiveRowCount để debug, không cần trong logic chính
+
+            dataRows.forEach((row, index) => {
+                // GIẢM ĐIỀU KIỆN: Chỉ cần ít nhất 3 cột (Câu hỏi, Đáp án, 1 Phương án)
+                if (!row || row.length < 3) return;
+
+                const questionText = String(row[0] || '').trim();
+                const correctAnswerString = String(row[1] || '').trim(); // Ví dụ: "1", "24", "3"
+                
+                // Bỏ qua nếu câu hỏi hoặc đáp án đúng trống (Đây là điều kiện quan trọng nhất)
+                if (questionText.length === 0 || correctAnswerString.length === 0) return;
+                
+                // Lấy 8 cột đáp án (index 2 đến 9), loại bỏ các đáp án trống
+                const choices = row.slice(2, 10).map(c => String(c || '').trim()).filter(c => c.length > 0); 
+                
+                if (choices.length === 0) return; // Bỏ qua nếu không có phương án nào
+
+                // Chuyển chuỗi đáp án đúng thành mảng index (bắt đầu từ 0)
+                const correctIndices = Array.from(new Set(correctAnswerString.split('').filter(s => s.trim().length > 0).map(s => parseInt(s) - 1))).sort((a, b) => a - b);
+
+                // Validation: đảm bảo index đáp án đúng hợp lệ (ví dụ: đáp án '1' phải nhỏ hơn số lượng phương án (choices.length))
+                if (correctIndices.some(i => i < 0 || i >= choices.length)) {
+                    console.warn(`Câu hỏi dòng ${index + 1} có đáp án đúng không hợp lệ: ${correctAnswerString} với ${choices.length} lựa chọn.`);
+                    return; // Bỏ qua câu hỏi này
+                }
+
+                const isMultiSelect = correctIndices.length > 1;
+
+                const qId = quizData.length; // ID tuần tự
+
+                quizData.push({
+                    id: qId,
+                    question: questionText,
+                    choices: choices,
+                    correctIndices: correctIndices, 
+                    isMultiSelect: isMultiSelect
+                });
+
+                userAnswers[qId] = isMultiSelect ? [] : null;
+                validQuestionCount++;
+            });
+            
+            return { initialRowCount, validQuestionCount };
+        }
+
+
+        // --- RENDERING FUNCTIONS ---
+
+        /**
+         * Lọc và hiển thị các câu hỏi dựa trên từ khóa tìm kiếm
+         */
+        function filterQuestions() {
+            const searchTerm = searchInput.value.toLowerCase().trim();
+            let visibleQuestionCount = 0;
+
+            quizData.forEach(q => {
+                const questionBox = document.getElementById(`question-box-${q.id}`);
+                const navBtn = document.getElementById(`nav-btn-${q.id}`);
+
+                if (!questionBox || !navBtn) return;
+
+                const questionText = q.question.toLowerCase();
+                const isVisible = searchTerm.length === 0 || questionText.includes(searchTerm);
+
+                questionBox.classList.toggle('hidden', !isVisible);
+                navBtn.classList.toggle('hidden', !isVisible);
+
+                if (isVisible) {
+                    visibleQuestionCount++;
+                }
+            });
+
+            // Nếu không có câu hỏi nào khớp, hiển thị thông báo nếu cần
+            if (visibleQuestionCount === 0 && searchTerm.length > 0) {
+                 // Không cần thông báo, chỉ cần ẩn đi
+            }
+        }
+
+        /**
+         * Cập nhật trạng thái màu sắc cho bảng điều hướng
+         */
+        function updateNavigationPanel() {
+            quizData.forEach(q => {
+                const navBtn = document.getElementById(`nav-btn-${q.id}`);
+                if (!navBtn) return;
+                
+                // Nếu câu hỏi đã được tiết lộ đáp án, KHÔNG thay đổi màu
+                if (revealedAnswers[q.id]) {
+                     return;
+                }
+
+                let isAnswered = false;
+                const answer = userAnswers[q.id];
+
+                if (q.isMultiSelect) {
+                    isAnswered = Array.isArray(answer) && answer.length > 0;
+                } else {
+                    isAnswered = answer !== null;
+                }
+
+                navBtn.classList.remove('unanswered', 'pending-answer'); // Loại bỏ các trạng thái màu hiện tại
+                
+                if (isAnswered) {
+                    // NEW: Chuyển sang Xanh lam nếu đã chọn nhưng chưa xem đáp án
+                    navBtn.classList.add('pending-answer'); 
+                } else {
+                    // Chuyển sang Trắng nếu chưa chọn
+                    navBtn.classList.add('unanswered'); 
+                }
+            });
+        }
+
+        /**
+         * Hiển thị giao diện bài thi
+         */
+        function renderQuiz() {
+            quizContainer.innerHTML = ''; 
+            navContainer.innerHTML = ''; // Clear navigation container
+
+            quizData.forEach((q, qIndex) => {
+                const isMultiSelect = q.isMultiSelect;
+
+                // --- 1. Render Question Content ---
+                const questionDiv = document.createElement('div');
+                questionDiv.id = `question-box-${q.id}`; // Thêm ID cho việc thao tác sau này
+                questionDiv.className = 'question-box mb-10 p-6 border border-gray-200 rounded-xl shadow-md bg-white hover:shadow-lg transition duration-200';
+                questionDiv.innerHTML = `
+                    <div class="flex justify-between items-start mb-4 border-b pb-3">
+                        <h3 class="text-xl font-semibold text-gray-800">
+                            <span class="text-blue-600 mr-2">Câu ${qIndex + 1}:</span> ${q.question}
+                        </h3>
+                        <button id="reveal-btn-${q.id}" class="reveal-btn px-3 py-1 bg-yellow-500 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-yellow-600 transition duration-150 transform hover:scale-[1.05]">
+                            Xem Đáp Án
+                        </button>
+                    </div>
+                    <p class="text-sm text-red-500 mb-4">${isMultiSelect ? '(Chọn nhiều đáp án)' : '(Chọn một đáp án)'}</p>
+                    <div class="space-y-3" id="choices-${q.id}">
+                        <!-- Choices go here -->
+                    </div>
+                `;
+
+                const choicesContainer = questionDiv.querySelector(`#choices-${q.id}`);
+
+                q.choices.forEach((choiceText, cIndex) => {
+                    const inputType = isMultiSelect ? 'checkbox' : 'radio';
+                    const name = `question-${q.id}`;
+                    const id = `q${q.id}-c${cIndex}`;
+
+                    const choiceDiv = document.createElement('label');
+                    choiceDiv.htmlFor = id;
+                    choiceDiv.className = 'choice-label flex items-start p-3 border border-gray-100 rounded-lg cursor-pointer transition-colors duration-150 hover:bg-blue-50';
+
+                    choiceDiv.innerHTML = `
+                        <input type="${inputType}" id="${id}" name="${name}" value="${cIndex}" class="choice-input mt-1 ${isMultiSelect ? 'form-checkbox h-5 w-5 text-blue-600 rounded' : 'form-radio h-5 w-5 text-blue-600'} focus:ring-blue-500 border-gray-300">
+                        <span class="ml-3 text-base text-gray-700 leading-relaxed">${choiceText}</span>
+                    `;
+
+                    choiceDiv.querySelector('input').addEventListener('change', (e) => handleAnswerChange(q.id, e.target.value, isMultiSelect, e.target.checked));
+
+                    choicesContainer.appendChild(choiceDiv);
+                });
+
+                // Gắn sự kiện cho nút xem đáp án
+                questionDiv.querySelector(`#reveal-btn-${q.id}`).addEventListener('click', () => showCorrectAnswer(q.id));
+
+                quizContainer.appendChild(questionDiv);
+
+                // --- 2. Render Navigation Button ---
+                const navBtn = document.createElement('button');
+                navBtn.id = `nav-btn-${q.id}`;
+                navBtn.textContent = qIndex + 1;
+                // Ban đầu là unanswered
+                navBtn.className = 'nav-btn px-2 py-1 text-sm font-semibold rounded-md border shadow-sm transition-all duration-150 unanswered';
+                
+                navBtn.addEventListener('click', () => {
+                    document.getElementById(`question-box-${q.id}`).scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'start' // Cuộn đến đầu câu hỏi
+                    });
+                });
+
+                navContainer.appendChild(navBtn);
+            });
+
+            updateNavigationPanel(); // Initialize colors
+            setViewState(STATE.QUIZ);
+        }
+
+        /**
+         * So sánh câu trả lời của người dùng với đáp án đúng.
+         * @param {Object} q - Đối tượng câu hỏi
+         * @returns {boolean} True nếu đúng, False nếu sai
+         */
+        function checkCorrectness(q) {
+            const userAnswer = q.isMultiSelect ? (userAnswers[q.id] || []) : (userAnswers[q.id] !== null ? [userAnswers[q.id]] : []);
+            const correctAnswers = q.correctIndices;
+
+            // Kiểm tra số lượng và nội dung của các lựa chọn
+            return userAnswer.length === correctAnswers.length && 
+                   userAnswer.every((val, index) => val === correctAnswers[index]);
+        }
+        
+        /**
+         * Hiển thị đáp án đúng cho một câu hỏi cụ thể trong chế độ Quiz.
+         * @param {number} questionId - ID câu hỏi
+         */
+        function showCorrectAnswer(questionId) {
+            if (revealedAnswers[questionId]) {
+                showMessage("Đáp án câu này đã được xem rồi.", 'info');
+                return;
+            }
+
+            const q = quizData.find(item => item.id === questionId);
+            if (!q) return;
+            
+            // --- Check Correctness ---
+            const isCorrect = checkCorrectness(q);
+            // --- END Check Correctness ---
+
+            const questionBox = document.getElementById(`question-box-${questionId}`);
+            const revealBtn = document.getElementById(`reveal-btn-${questionId}`);
+            const choiceLabels = questionBox.querySelectorAll('.choice-label');
+            const choiceInputs = questionBox.querySelectorAll('.choice-input');
+            const navBtn = document.getElementById(`nav-btn-${questionId}`); // Get navigation button
+
+            // 1. Tô màu và đánh dấu đáp án đúng trong nội dung câu hỏi
+            q.correctIndices.forEach(correctIndex => {
+                const label = choiceLabels[correctIndex];
+                const span = label.querySelector('span');
+                
+                label.classList.add('correct-choice');
+                
+                // Thêm ký hiệu [ĐÚNG]
+                span.innerHTML = `<span class="text-green-800">[ĐÚNG]</span> ${span.textContent}`;
+            });
+
+            // 2. Vô hiệu hóa tất cả các lựa chọn
+            choiceInputs.forEach(input => {
+                input.disabled = true;
+                input.classList.add('opacity-50');
+            });
+            
+            // 3. Vô hiệu hóa nút "Xem Đáp Án"
+            revealBtn.classList.add('answered-btn');
+            revealBtn.textContent = 'Đã xem';
+            
+            // 4. Cập nhật trạng thái và màu điều hướng (theo yêu cầu)
+            revealedAnswers[questionId] = true;
+            
+            // Xóa hết trạng thái màu tạm thời (pending-answer)
+            navBtn.classList.remove('unanswered', 'pending-answer');
+
+            if (isCorrect) {
+                // Giữ màu xanh lá nếu đúng
+                navBtn.classList.add('answered'); 
+                navBtn.classList.remove('wrong');
+            } else {
+                // Chuyển sang màu đỏ nếu sai
+                navBtn.classList.add('wrong'); 
+                navBtn.classList.remove('answered');
+            }
+
+            showMessage(`Đáp án đúng cho Câu ${q.id + 1} đã được hiển thị. Bạn trả lời ${isCorrect ? 'ĐÚNG' : 'SAI'}.`, isCorrect ? 'success' : 'error');
+        }
+
+        /**
+         * Xử lý khi người dùng chọn/bỏ chọn đáp án
+         */
+        function handleAnswerChange(questionId, choiceIndex, isMultiSelect, isChecked) {
+            // Ngăn chặn thay đổi nếu đáp án đã được xem
+            if (revealedAnswers[questionId]) {
+                showMessage("Không thể thay đổi câu trả lời sau khi xem đáp án.", 'info');
+                return; 
+            }
+            
+            const index = parseInt(choiceIndex);
+
+            if (isMultiSelect) {
+                let currentSelections = userAnswers[questionId] || [];
+                if (isChecked) {
+                    if (!currentSelections.includes(index)) {
+                        currentSelections.push(index);
+                    }
+                } else {
+                    currentSelections = currentSelections.filter(i => i !== index);
+                }
+                userAnswers[questionId] = currentSelections.sort((a, b) => a - b);
+            } else {
+                // Nếu là radio, chỉ cần gán index mới
+                userAnswers[questionId] = index;
+            }
+
+            // Cập nhật trạng thái bảng điều hướng
+            updateNavigationPanel();
+        }
+
+        /**
+         * Hiển thị kết quả và chi tiết đáp án
+         */
+        function renderResults() {
+            let correctCount = 0;
+            const reviewContainer = document.getElementById('review-container');
+            reviewContainer.innerHTML = '';
+
+            quizData.forEach((q, qIndex) => {
+                const userAnswer = q.isMultiSelect ? (userAnswers[q.id] || []) : (userAnswers[q.id] !== null ? [userAnswers[q.id]] : []);
+                const correctAnswers = q.correctIndices;
+
+                const isCorrect = userAnswer.length === correctAnswers.length && userAnswer.every((val, index) => val === correctAnswers[index]);
+
+                if (isCorrect) {
+                    correctCount++;
+                }
+
+                const statusColor = isCorrect ? 'bg-green-100 border-green-300' : 'bg-red-100 border-red-300';
+                const statusText = isCorrect ? 'ĐÚNG' : 'SAI';
+                const statusTextColor = isCorrect ? 'text-green-800' : 'text-red-800';
+
+                const reviewItem = document.createElement('div');
+                reviewItem.className = `p-5 rounded-lg border-2 ${statusColor} shadow-sm mb-6`;
+                reviewItem.innerHTML = `
+                    <h4 class="text-lg font-bold text-gray-900 mb-3 flex justify-between items-center">
+                        <span>Câu ${qIndex + 1}: ${q.question}</span>
+                        <span class="px-3 py-1 text-sm font-semibold rounded-full ${statusTextColor} bg-white">${statusText}</span>
+                    </h4>
+                    <div class="space-y-2">
+                        ${q.choices.map((choiceText, cIndex) => {
+                            const isUserSelected = userAnswer.includes(cIndex);
+                            const isCorrectChoice = correctAnswers.includes(cIndex);
+
+                            let choiceClass = 'p-2 rounded-md transition-all duration-150 border';
+
+                            if (isCorrectChoice) {
+                                choiceClass += ' bg-green-200 border-green-500 font-semibold';
+                            } else if (isUserSelected && !isCorrectChoice) {
+                                choiceClass += ' bg-red-200 border-red-500 line-through';
+                            } else {
+                                choiceClass += ' bg-gray-50 border-gray-200 text-gray-700';
+                            }
+
+                            const icon = isCorrectChoice ? '<span class="text-green-600 mr-2">✓</span>' : (isUserSelected ? '<span class="text-red-600 mr-2">✖</span>' : '<span class="text-gray-400 mr-2">○</span>');
+
+                            return `<p class="${choiceClass} flex items-start">${icon} ${choiceText}</p>`;
+                        }).join('')}
+                    </div>
+                `;
+                reviewContainer.appendChild(reviewItem);
+            });
+
+            document.getElementById('total-questions').textContent = quizData.length;
+            document.getElementById('correct-answers').textContent = correctCount;
+
+            setViewState(STATE.RESULTS);
+        }
+
+        // --- FILE PROCESSING ---
+
+        /**
+         * Xử lý một file Excel/CSV cụ thể
+         * @param {File} file - Đối tượng file
+         * @returns {Promise<Array<Array<string>>>} Dữ liệu thô từ file
+         */
+        function processSingleFile(file) {
+            return new Promise(async (resolve, reject) => {
+                const fileName = file.name;
+                
+                if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+                    // Xử lý file Excel
+                    if (typeof XLSX === 'undefined') {
+                        return reject(new Error("Thư viện SheetJS chưa được tải."));
+                    }
+                    try {
+                        const arrayBuffer = await new Promise((res, rej) => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => res(e.target.result);
+                            reader.onerror = () => rej(new Error("Lỗi đọc file Excel."));
+                            reader.readAsArrayBuffer(file);
+                        });
+
+                        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+                        const sheetName = workbook.SheetNames[0];
+                        const sheet = workbook.Sheets[sheetName];
+
+                        // Chuyển đổi sheet đầu tiên thành mảng các mảng
+                        const data = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                        resolve(data);
+
+                    } catch (error) {
+                        reject(new Error(`Lỗi phân tích file Excel (${fileName}): ${error.message}`));
+                    }
+                } else if (fileName.endsWith('.csv')) {
+                    // Xử lý file CSV
+                    try {
+                        const text = await file.text();
+                        resolve(parseCSV(text));
+                    } catch (error) {
+                        reject(new Error(`Lỗi phân tích file CSV (${fileName}): ${error.message}`));
+                    }
+                } else {
+                    reject(new Error(`Định dạng file không được hỗ trợ (${fileName}).`));
+                }
+            });
+        }
+
+        /**
+         * Xử lý nhiều file và gộp dữ liệu
+         * @param {FileList} fileList - Danh sách các file được chọn
+         */
+        async function processFiles(fileList) {
+            const files = Array.from(fileList);
+            let combinedRawData = [];
+            let totalInitialRowCount = 0;
+            let errorCount = 0;
+
+            for (const file of files) {
+                try {
+                    const rawData = await processSingleFile(file);
+                    combinedRawData = combinedRawData.concat(rawData);
+                    totalInitialRowCount += rawData.length;
+                } catch (error) {
+                    console.error(error.message);
+                    errorCount++;
+                    showMessage(`Lỗi tải file: ${file.name}. Vui lòng kiểm tra định dạng/cấu trúc.`, 'error');
+                }
+            }
+
+            if (combinedRawData.length === 0) {
+                showMessage("Không tìm thấy dữ liệu hợp lệ nào từ các file đã chọn.", 'error');
+                return;
+            }
+
+            const { validQuestionCount } = normalizeData(combinedRawData);
+
+            if (validQuestionCount === 0) {
+                 showMessage(`Đã đọc ${totalInitialRowCount} dòng dữ liệu từ ${files.length} file, nhưng không tìm thấy câu hỏi hợp lệ nào.`, 'error');
+                return;
+            }
+            
+            showMessage(`Đã tải thành công ${validQuestionCount} câu hỏi từ ${files.length} file.`, 'success');
+            renderQuiz();
+        }
+
+        // --- EVENT HANDLERS ---
+
+        /**
+         * Xử lý sự kiện tải file CSV/Excel (Hỗ trợ nhiều file)
+         */
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            if (files.length === 0) return;
+
+            // Xử lý danh sách file
+            processFiles(files);
+        }
+
+        /**
+         * Xử lý sự kiện nộp bài
+         */
+        function handleSubmitQuiz() {
+            if (quizData.length === 0) {
+                showMessage("Vui lòng tải lên file đề thi trước.", 'info');
+                return;
+            }
+            renderResults();
+        }
+
+        /**
+         * Xử lý sự kiện làm bài thi mới
+         */
+        function handleRestartQuiz() {
+            quizData = [];
+            userAnswers = {};
+            revealedAnswers = {};
+            fileInput.value = ''; // Reset input file
+            setViewState(STATE.UPLOAD);
+        }
+
+
+        // --- INITIALIZATION ---
+        function init() {
+            fileInput.addEventListener('change', handleFileUpload);
+            submitButton.addEventListener('click', handleSubmitQuiz);
+            restartButton.addEventListener('click', handleRestartQuiz);
+            
+            // Gắn sự kiện cho ô tìm kiếm
+            if (searchInput) {
+                 searchInput.addEventListener('input', filterQuestions);
+            }
+            
+            setViewState(STATE.UPLOAD); 
+        }
+
+        window.onload = init;
+
+    </script>
+</body>
+</html>
