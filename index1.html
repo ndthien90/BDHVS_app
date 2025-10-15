@@ -94,6 +94,14 @@
             <!-- Cho phép chọn nhiều file CSV, XLSX và XLS -->
             <input type="file" id="csv-file" accept=".csv, .xlsx, .xls" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
 
+            <!-- NEW: Nút tải dữ liệu demo -->
+            <div class="mt-4 flex justify-center">
+                <button id="load-demo-data" class="px-6 py-2 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 transition duration-300 transform hover:scale-[1.02]">
+                    Hoặc Tải Dữ Liệu Demo (data/dulieu.xlsx)
+                </button>
+            </div>
+            <!-- END NEW -->
+
             <div class="mt-8 p-4 bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 rounded-lg">
                 <h3 class="font-bold text-lg mb-2">Lưu ý về Cấu trúc Dữ liệu</h3>
                 <ul class="list-disc list-inside space-y-1 text-sm">
@@ -171,6 +179,9 @@
             RESULTS: 'results'
         };
 
+        // Đường dẫn file demo
+        const DEMO_FILE_PATH = 'data/dulieu.xlsx'; 
+
         let currentViewState = STATE.UPLOAD;
         let quizData = [];
         let userAnswers = {};
@@ -188,6 +199,7 @@
         const messageBox = document.getElementById('message-box');
         const navContainer = document.getElementById('nav-container');
         const searchInput = document.getElementById('search-input'); 
+        const loadDemoButton = document.getElementById('load-demo-data'); // NEW: Nút tải demo
 
         // --- UTILITY FUNCTIONS ---
 
@@ -673,12 +685,12 @@
 
         /**
          * Xử lý một file Excel/CSV cụ thể
-         * @param {File} file - Đối tượng file
+         * @param {File | ArrayBuffer} source - Đối tượng file hoặc ArrayBuffer (cho file demo)
+         * @param {string} fileName - Tên file (dùng cho thông báo)
          * @returns {Promise<Array<Array<string>>>} Dữ liệu thô từ file
          */
-        function processSingleFile(file) {
+        function processSingleFile(source, fileName) {
             return new Promise(async (resolve, reject) => {
-                const fileName = file.name;
                 
                 if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
                     // Xử lý file Excel
@@ -686,12 +698,23 @@
                         return reject(new Error("Thư viện SheetJS chưa được tải."));
                     }
                     try {
-                        const arrayBuffer = await new Promise((res, rej) => {
-                            const reader = new FileReader();
-                            reader.onload = (e) => res(e.target.result);
-                            reader.onerror = () => rej(new Error("Lỗi đọc file Excel."));
-                            reader.readAsArrayBuffer(file);
-                        });
+                        let arrayBuffer;
+                        
+                        if (source instanceof File) {
+                            // Từ File Input
+                            arrayBuffer = await new Promise((res, rej) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => res(e.target.result);
+                                reader.onerror = () => rej(new Error("Lỗi đọc file Excel."));
+                                reader.readAsArrayBuffer(source);
+                            });
+                        } else if (source instanceof ArrayBuffer) {
+                            // Từ Fetch (File demo)
+                            arrayBuffer = source;
+                        } else {
+                            return reject(new Error("Nguồn dữ liệu không hợp lệ."));
+                        }
+
 
                         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
                         const sheetName = workbook.SheetNames[0];
@@ -704,10 +727,10 @@
                     } catch (error) {
                         reject(new Error(`Lỗi phân tích file Excel (${fileName}): ${error.message}`));
                     }
-                } else if (fileName.endsWith('.csv')) {
-                    // Xử lý file CSV
+                } else if (fileName.endsWith('.csv') && source instanceof File) {
+                    // Xử lý file CSV (chỉ hỗ trợ từ file input)
                     try {
-                        const text = await file.text();
+                        const text = await source.text();
                         resolve(parseCSV(text));
                     } catch (error) {
                         reject(new Error(`Lỗi phân tích file CSV (${fileName}): ${error.message}`));
@@ -720,23 +743,37 @@
 
         /**
          * Xử lý nhiều file và gộp dữ liệu
-         * @param {FileList} fileList - Danh sách các file được chọn
+         * @param {FileList | Array<object>} sources - Danh sách các file được chọn (FileList) 
+         * hoặc mảng mô tả file demo (vd: [{ source: ArrayBuffer, name: 'dulieu.xlsx' }])
          */
-        async function processFiles(fileList) {
-            const files = Array.from(fileList);
+        async function processFiles(sources) {
+            let filesArray = [];
+            
+            if (sources instanceof FileList) {
+                // Từ File Input
+                filesArray = Array.from(sources).map(file => ({ source: file, name: file.name }));
+            } else if (Array.isArray(sources)) {
+                // Từ Demo Fetch
+                filesArray = sources;
+            } else {
+                showMessage("Nguồn dữ liệu không hợp lệ.", 'error');
+                return;
+            }
+
             let combinedRawData = [];
             let totalInitialRowCount = 0;
             let errorCount = 0;
 
-            for (const file of files) {
+            for (const fileItem of filesArray) {
+                const { source, name } = fileItem;
                 try {
-                    const rawData = await processSingleFile(file);
+                    const rawData = await processSingleFile(source, name);
                     combinedRawData = combinedRawData.concat(rawData);
                     totalInitialRowCount += rawData.length;
                 } catch (error) {
                     console.error(error.message);
                     errorCount++;
-                    showMessage(`Lỗi tải file: ${file.name}. Vui lòng kiểm tra định dạng/cấu trúc.`, 'error');
+                    showMessage(`Lỗi tải file: ${name}. Vui lòng kiểm tra định dạng/cấu trúc.`, 'error');
                 }
             }
 
@@ -748,14 +785,58 @@
             const { validQuestionCount } = normalizeData(combinedRawData);
 
             if (validQuestionCount === 0) {
-                 showMessage(`Đã đọc ${totalInitialRowCount} dòng dữ liệu từ ${files.length} file, nhưng không tìm thấy câu hỏi hợp lệ nào.`, 'error');
+                 showMessage(`Đã đọc ${totalInitialRowCount} dòng dữ liệu từ ${filesArray.length} file, nhưng không tìm thấy câu hỏi hợp lệ nào.`, 'error');
                 return;
             }
             
-            showMessage(`Đã tải thành công ${validQuestionCount} câu hỏi từ ${files.length} file.`, 'success');
+            showMessage(`Đã tải thành công ${validQuestionCount} câu hỏi từ ${filesArray.length} file.`, 'success');
             renderQuiz();
         }
 
+        // --- NEW DEMO FILE HANDLING ---
+        
+        /**
+         * Tải file demo từ đường dẫn và xử lý
+         */
+        async function fetchAndProcessDemoFile() {
+             // Vô hiệu hóa nút và hiển thị trạng thái tải
+            loadDemoButton.disabled = true;
+            loadDemoButton.textContent = 'Đang tải...';
+            loadDemoButton.classList.remove('hover:bg-purple-700');
+            loadDemoButton.classList.add('bg-gray-400', 'cursor-not-allowed');
+
+            try {
+                // Dùng fetch để tải file nhị phân (ArrayBuffer)
+                const response = await fetch(DEMO_FILE_PATH);
+                
+                if (!response.ok) {
+                    throw new Error(`Lỗi HTTP: ${response.status} - Không thể tải file demo từ ${DEMO_FILE_PATH}.`);
+                }
+
+                // Lấy ArrayBuffer (dạng cần thiết cho SheetJS)
+                const arrayBuffer = await response.arrayBuffer();
+
+                // Tạo mảng nguồn dữ liệu (chỉ có 1 file demo)
+                const sources = [{
+                    source: arrayBuffer,
+                    name: DEMO_FILE_PATH.split('/').pop() || 'dulieu.xlsx' // Lấy tên file
+                }];
+
+                // Xử lý dữ liệu
+                await processFiles(sources);
+
+            } catch (error) {
+                console.error("Lỗi tải hoặc xử lý file demo:", error);
+                showMessage(`Lỗi tải dữ liệu demo: ${error.message}. Vui lòng kiểm tra đường dẫn file (${DEMO_FILE_PATH}).`, 'error');
+            } finally {
+                // Bật lại nút
+                loadDemoButton.disabled = false;
+                loadDemoButton.textContent = 'Hoặc Tải Dữ Liệu Demo (data/dulieu.xlsx)';
+                loadDemoButton.classList.add('hover:bg-purple-700');
+                loadDemoButton.classList.remove('bg-gray-400', 'cursor-not-allowed');
+            }
+        }
+        
         // --- EVENT HANDLERS ---
 
         /**
@@ -797,6 +878,9 @@
             fileInput.addEventListener('change', handleFileUpload);
             submitButton.addEventListener('click', handleSubmitQuiz);
             restartButton.addEventListener('click', handleRestartQuiz);
+            
+            // NEW: Gắn sự kiện cho nút tải demo
+            loadDemoButton.addEventListener('click', fetchAndProcessDemoFile);
             
             // Gắn sự kiện cho ô tìm kiếm
             if (searchInput) {

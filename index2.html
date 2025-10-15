@@ -44,7 +44,7 @@
             transform: scale(1.05);
         }
         
-        /* NEW: Câu trả lời đã được chọn, chờ chấm (Màu xanh lam) */
+        /* Câu trả lời đã được chọn, chờ chấm (Màu xanh lam) */
         .nav-btn.pending-answer {
             background-color: #3b82f6; /* blue-500 */
             color: white;
@@ -78,7 +78,7 @@
             Tạo Đề Thi Trắc Nghiệm Tự Động
         </h1>
         <p class="text-center text-gray-600 mb-8">
-            Vui lòng tải lên **nhiều** file **Excel (.xlsx/.xls)** hoặc **CSV** theo cấu trúc đã cung cấp.
+            Dữ liệu được **tự động tải lại** từ phiên làm việc trước hoặc có thể được **tải lên/gộp thêm** từ các file Excel/CSV.
         </p>
         <hr class="mb-8">
 
@@ -93,6 +93,7 @@
             </label>
             <!-- Cho phép chọn nhiều file CSV, XLSX và XLS -->
             <input type="file" id="csv-file" accept=".csv, .xlsx, .xls" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+            <button id="start-with-empty" class="mt-4 px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-300 hidden">Bỏ qua, Bắt đầu trống</button>
 
             <div class="mt-8 p-4 bg-yellow-50 border-l-4 border-yellow-500 text-yellow-700 rounded-lg">
                 <h3 class="font-bold text-lg mb-2">Lưu ý về Cấu trúc Dữ liệu</h3>
@@ -109,6 +110,14 @@
 
         <!-- 2. Quiz View -->
         <div id="quiz-view" class="hidden">
+            <!-- Data Status & Upload Box (NEW) -->
+            <div id="data-status-box" class="p-4 mb-6 rounded-lg shadow-sm flex items-center justify-between bg-blue-50 border border-blue-200">
+                <span id="data-status-message" class="text-sm font-semibold text-blue-700"></span>
+                <button id="add-more-data" class="px-3 py-1 bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-blue-600 transition duration-150">
+                    Tải/Gộp thêm Dữ liệu
+                </button>
+            </div>
+            
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
                 
                 <!-- Bảng điều hướng câu hỏi (Left Panel) -->
@@ -164,6 +173,13 @@
     </div>
 
     <script>
+        // Tên key dùng để lưu dữ liệu vào localStorage
+        const LOCAL_STORAGE_KEY = 'quizGeneratorData';
+        
+        // Đường dẫn file dữ liệu tĩnh trên máy chủ (cần deploy cùng với file HTML)
+        // Đảm bảo bạn có file master_quiz_data.csv trong thư mục 'data' trên GitHub
+        const REMOTE_DATA_URL = 'data/dulieu.xlsx'; 
+
         // --- CONSTANTS AND STATE ---
         const STATE = {
             UPLOAD: 'upload',
@@ -188,8 +204,46 @@
         const messageBox = document.getElementById('message-box');
         const navContainer = document.getElementById('nav-container');
         const searchInput = document.getElementById('search-input'); 
+        const dataStatusMessage = document.getElementById('data-status-message');
+        const addMoreDataButton = document.getElementById('add-more-data');
 
         // --- UTILITY FUNCTIONS ---
+
+        /**
+         * Lưu dữ liệu quizData hiện tại vào localStorage
+         */
+        function saveQuizData() {
+            try {
+                // Chỉ lưu các thuộc tính cần thiết, bao gồm trạng thái revealedAnswers
+                const dataToSave = quizData.map(q => ({
+                    ...q,
+                    revealed: revealedAnswers[q.id] || false // Gắn trạng thái đã xem vào object
+                }));
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+            } catch (e) {
+                console.error("Lỗi khi lưu dữ liệu vào LocalStorage:", e);
+                // Không hiển thị lỗi cho người dùng cuối trừ khi cần thiết
+            }
+        }
+
+        /**
+         * Tải dữ liệu quizData từ localStorage
+         * @returns {Array} Dữ liệu quizData đã lưu, hoặc mảng rỗng nếu không có
+         */
+        function loadQuizData() {
+            try {
+                const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (storedData) {
+                    const loadedData = JSON.parse(storedData);
+                    // Đảm bảo ID được duy trì
+                    return loadedData.map((q, index) => ({...q, id: index})); 
+                }
+            } catch (e) {
+                console.error("Lỗi khi tải dữ liệu từ LocalStorage:", e);
+                localStorage.removeItem(LOCAL_STORAGE_KEY); // Xóa dữ liệu lỗi
+            }
+            return [];
+        }
 
         /**
          * Hiển thị thông báo tùy chỉnh (thay thế alert())
@@ -238,6 +292,8 @@
                     if (searchInput) {
                         searchInput.value = '';
                     }
+                    // Cập nhật thông báo trạng thái dữ liệu
+                    dataStatusMessage.textContent = `Đang sử dụng ${quizData.length} câu hỏi. Dữ liệu đã được lưu tự động.`;
                     // Bắt đầu tìm kiếm ngay khi view được mở
                     filterQuestions(); 
                     break;
@@ -281,17 +337,15 @@
         }
 
         /**
-         * Chuyển đổi dữ liệu thô (CSV/XLSX) thành cấu trúc dữ liệu Quiz đã chuẩn hóa.
+         * Chuẩn hóa dữ liệu thô (CSV/XLSX) thành cấu trúc dữ liệu Quiz đã chuẩn hóa.
          * @param {Array<Array<string>>} rawData - Dữ liệu thô từ CSV hoặc XLSX
+         * @param {Array<Object>} existingQuizData - Dữ liệu câu hỏi hiện có (để gộp)
          */
-        function normalizeData(rawData) {
-            quizData = [];
-            userAnswers = {};
-            revealedAnswers = {}; // Reset trạng thái xem đáp án
-
+        function normalizeData(rawData, existingQuizData = []) {
+            let combinedData = [...existingQuizData]; // Bắt đầu từ dữ liệu hiện có
+            
             let dataRows = rawData;
             const initialRowCount = dataRows.length;
-            let validQuestionCount = 0;
             let firstValidRowIndex = -1;
 
             // 1. Tìm dòng đầu tiên có vẻ là câu hỏi hợp lệ (có nội dung ở Cột A và B)
@@ -312,9 +366,9 @@
             if (firstValidRowIndex > 0) {
                  dataRows = dataRows.slice(firstValidRowIndex);
             }
-            
-            // Cập nhật lại rawData để phản ánh việc cắt bỏ header
-            // const effectiveRowCount = dataRows.length; // Dùng effectiveRowCount để debug, không cần trong logic chính
+
+            let newValidQuestions = 0;
+            const startingId = combinedData.length;
 
             dataRows.forEach((row, index) => {
                 // GIẢM ĐIỀU KIỆN: Chỉ cần ít nhất 3 cột (Câu hỏi, Đáp án, 1 Phương án)
@@ -334,7 +388,7 @@
                 // Chuyển chuỗi đáp án đúng thành mảng index (bắt đầu từ 0)
                 const correctIndices = Array.from(new Set(correctAnswerString.split('').filter(s => s.trim().length > 0).map(s => parseInt(s) - 1))).sort((a, b) => a - b);
 
-                // Validation: đảm bảo index đáp án đúng hợp lệ (ví dụ: đáp án '1' phải nhỏ hơn số lượng phương án (choices.length))
+                // Validation: đảm bảo index đáp án đúng hợp lệ
                 if (correctIndices.some(i => i < 0 || i >= choices.length)) {
                     console.warn(`Câu hỏi dòng ${index + 1} có đáp án đúng không hợp lệ: ${correctAnswerString} với ${choices.length} lựa chọn.`);
                     return; // Bỏ qua câu hỏi này
@@ -342,9 +396,9 @@
 
                 const isMultiSelect = correctIndices.length > 1;
 
-                const qId = quizData.length; // ID tuần tự
+                const qId = startingId + newValidQuestions; // ID tuần tự
 
-                quizData.push({
+                combinedData.push({
                     id: qId,
                     question: questionText,
                     choices: choices,
@@ -352,11 +406,20 @@
                     isMultiSelect: isMultiSelect
                 });
 
-                userAnswers[qId] = isMultiSelect ? [] : null;
-                validQuestionCount++;
+                newValidQuestions++;
             });
             
-            return { initialRowCount, validQuestionCount };
+            // Cập nhật state toàn cục
+            quizData = combinedData;
+
+            // Khởi tạo userAnswers và revealedAnswers cho các câu hỏi mới
+            for(let i = startingId; i < quizData.length; i++) {
+                 const q = quizData[i];
+                 userAnswers[q.id] = q.isMultiSelect ? [] : null;
+                 revealedAnswers[q.id] = false;
+            }
+
+            return { initialRowCount, newValidQuestions };
         }
 
 
@@ -385,11 +448,6 @@
                     visibleQuestionCount++;
                 }
             });
-
-            // Nếu không có câu hỏi nào khớp, hiển thị thông báo nếu cần
-            if (visibleQuestionCount === 0 && searchTerm.length > 0) {
-                 // Không cần thông báo, chỉ cần ẩn đi
-            }
         }
 
         /**
@@ -411,13 +469,13 @@
                 if (q.isMultiSelect) {
                     isAnswered = Array.isArray(answer) && answer.length > 0;
                 } else {
-                    isAnswered = answer !== null;
+                    isAnswered = answer !== null && answer !== undefined;
                 }
 
                 navBtn.classList.remove('unanswered', 'pending-answer'); // Loại bỏ các trạng thái màu hiện tại
                 
                 if (isAnswered) {
-                    // NEW: Chuyển sang Xanh lam nếu đã chọn nhưng chưa xem đáp án
+                    // Chuyển sang Xanh lam nếu đã chọn nhưng chưa xem đáp án
                     navBtn.classList.add('pending-answer'); 
                 } else {
                     // Chuyển sang Trắng nếu chưa chọn
@@ -445,8 +503,8 @@
                         <h3 class="text-xl font-semibold text-gray-800">
                             <span class="text-blue-600 mr-2">Câu ${qIndex + 1}:</span> ${q.question}
                         </h3>
-                        <button id="reveal-btn-${q.id}" class="reveal-btn px-3 py-1 bg-yellow-500 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-yellow-600 transition duration-150 transform hover:scale-[1.05]">
-                            Xem Đáp Án
+                        <button id="reveal-btn-${q.id}" class="reveal-btn px-3 py-1 bg-yellow-500 text-white text-sm font-semibold rounded-lg shadow-md hover:bg-yellow-600 transition duration-150 transform hover:scale-[1.05] ${revealedAnswers[q.id] ? 'answered-btn' : ''}" ${revealedAnswers[q.id] ? 'disabled' : ''}>
+                            ${revealedAnswers[q.id] ? 'Đã xem' : 'Xem Đáp Án'}
                         </button>
                     </div>
                     <p class="text-sm text-red-500 mb-4">${isMultiSelect ? '(Chọn nhiều đáp án)' : '(Chọn một đáp án)'}</p>
@@ -466,12 +524,23 @@
                     choiceDiv.htmlFor = id;
                     choiceDiv.className = 'choice-label flex items-start p-3 border border-gray-100 rounded-lg cursor-pointer transition-colors duration-150 hover:bg-blue-50';
 
+                    const isChecked = isMultiSelect 
+                        ? (userAnswers[q.id] || []).includes(cIndex) 
+                        : (userAnswers[q.id] === cIndex);
+
                     choiceDiv.innerHTML = `
-                        <input type="${inputType}" id="${id}" name="${name}" value="${cIndex}" class="choice-input mt-1 ${isMultiSelect ? 'form-checkbox h-5 w-5 text-blue-600 rounded' : 'form-radio h-5 w-5 text-blue-600'} focus:ring-blue-500 border-gray-300">
+                        <input type="${inputType}" id="${id}" name="${name}" value="${cIndex}" class="choice-input mt-1 ${isMultiSelect ? 'form-checkbox h-5 w-5 text-blue-600 rounded' : 'form-radio h-5 w-5 text-blue-600'} focus:ring-blue-500 border-gray-300" ${isChecked ? 'checked' : ''} ${revealedAnswers[q.id] ? 'disabled opacity-50' : ''}>
                         <span class="ml-3 text-base text-gray-700 leading-relaxed">${choiceText}</span>
                     `;
 
                     choiceDiv.querySelector('input').addEventListener('change', (e) => handleAnswerChange(q.id, e.target.value, isMultiSelect, e.target.checked));
+
+                    // Nếu đã xem đáp án, tô màu đáp án đúng
+                    if (revealedAnswers[q.id] && q.correctIndices.includes(cIndex)) {
+                        choiceDiv.classList.add('correct-choice');
+                        choiceDiv.querySelector('span').innerHTML = `<span class="text-green-800">[ĐÚNG]</span> ${choiceDiv.querySelector('span').textContent}`;
+                    }
+
 
                     choicesContainer.appendChild(choiceDiv);
                 });
@@ -486,7 +555,15 @@
                 navBtn.id = `nav-btn-${q.id}`;
                 navBtn.textContent = qIndex + 1;
                 // Ban đầu là unanswered
-                navBtn.className = 'nav-btn px-2 py-1 text-sm font-semibold rounded-md border shadow-sm transition-all duration-150 unanswered';
+                navBtn.className = 'nav-btn px-2 py-1 text-sm font-semibold rounded-md border shadow-sm transition-all duration-150';
+                
+                // Cập nhật trạng thái màu ban đầu (để áp dụng màu đỏ/xanh lá nếu đã được xem)
+                if (revealedAnswers[q.id]) {
+                    const isCorrect = checkCorrectness(q);
+                    navBtn.classList.add(isCorrect ? 'answered' : 'wrong');
+                } else {
+                     navBtn.classList.add('unanswered');
+                }
                 
                 navBtn.addEventListener('click', () => {
                     document.getElementById(`question-box-${q.id}`).scrollIntoView({ 
@@ -498,8 +575,9 @@
                 navContainer.appendChild(navBtn);
             });
 
-            updateNavigationPanel(); // Initialize colors
+            updateNavigationPanel(); // Update pending-answer colors
             setViewState(STATE.QUIZ);
+            saveQuizData(); // Lưu dữ liệu mới nhất
         }
 
         /**
@@ -546,8 +624,10 @@
                 
                 label.classList.add('correct-choice');
                 
-                // Thêm ký hiệu [ĐÚNG]
-                span.innerHTML = `<span class="text-green-800">[ĐÚNG]</span> ${span.textContent}`;
+                // Tránh thêm [ĐÚNG] nhiều lần
+                if (!span.textContent.includes('[ĐÚNG]')) {
+                    span.innerHTML = `<span class="text-green-800">[ĐÚNG]</span> ${span.textContent}`;
+                }
             });
 
             // 2. Vô hiệu hóa tất cả các lựa chọn
@@ -559,22 +639,23 @@
             // 3. Vô hiệu hóa nút "Xem Đáp Án"
             revealBtn.classList.add('answered-btn');
             revealBtn.textContent = 'Đã xem';
+            revealBtn.disabled = true;
             
             // 4. Cập nhật trạng thái và màu điều hướng (theo yêu cầu)
             revealedAnswers[questionId] = true;
             
             // Xóa hết trạng thái màu tạm thời (pending-answer)
-            navBtn.classList.remove('unanswered', 'pending-answer');
+            navBtn.classList.remove('unanswered', 'pending-answer', 'answered', 'wrong');
 
             if (isCorrect) {
-                // Giữ màu xanh lá nếu đúng
+                // Chuyển sang màu xanh lá nếu đúng
                 navBtn.classList.add('answered'); 
-                navBtn.classList.remove('wrong');
             } else {
                 // Chuyển sang màu đỏ nếu sai
                 navBtn.classList.add('wrong'); 
-                navBtn.classList.remove('answered');
             }
+            
+            saveQuizData(); // Lưu trạng thái revealedAnswers
 
             showMessage(`Đáp án đúng cho Câu ${q.id + 1} đã được hiển thị. Bạn trả lời ${isCorrect ? 'ĐÚNG' : 'SAI'}.`, isCorrect ? 'success' : 'error');
         }
@@ -717,16 +798,57 @@
                 }
             });
         }
+        
+        /**
+         * Tải dữ liệu từ đường dẫn tĩnh trên máy chủ (Server Fetch)
+         */
+        async function fetchRemoteData() {
+            try {
+                const response = await fetch(REMOTE_DATA_URL);
+
+                if (!response.ok) {
+                    // Xử lý lỗi 404 (file không tồn tại) hoặc các lỗi HTTP khác
+                    throw new Error(`Không thể tải dữ liệu: ${response.status} ${response.statusText}`);
+                }
+
+                const text = await response.text();
+                
+                // Dữ liệu tĩnh phải là CSV (vì fetch không thể tự động xử lý XLSX)
+                const rawData = parseCSV(text); 
+                
+                // Thay thế dữ liệu hiện có (vì localStorage rỗng)
+                const { newValidQuestions } = normalizeData(rawData, []); 
+
+                if (newValidQuestions === 0) {
+                    showMessage("Đã tải dữ liệu từ máy chủ nhưng không tìm thấy câu hỏi hợp lệ nào.", 'error');
+                    return false;
+                }
+
+                showMessage(`Đã tải thành công ${newValidQuestions} câu hỏi từ máy chủ.`, 'success');
+                renderQuiz();
+                return true;
+
+            } catch (error) {
+                console.error("Lỗi tải dữ liệu từ server:", error);
+                showMessage("Không thể tải dữ liệu tự động. Vui lòng tải file lên.", 'error');
+                return false;
+            }
+        }
 
         /**
          * Xử lý nhiều file và gộp dữ liệu
          * @param {FileList} fileList - Danh sách các file được chọn
+         * @param {boolean} shouldAppend - True nếu nên gộp vào dữ liệu hiện có, False nếu thay thế
          */
-        async function processFiles(fileList) {
+        async function processFiles(fileList, shouldAppend = false) {
             const files = Array.from(fileList);
             let combinedRawData = [];
             let totalInitialRowCount = 0;
-            let errorCount = 0;
+
+            if (files.length === 0) {
+                 showMessage("Vui lòng chọn ít nhất một file.", 'info');
+                 return;
+            }
 
             for (const file of files) {
                 try {
@@ -735,7 +857,6 @@
                     totalInitialRowCount += rawData.length;
                 } catch (error) {
                     console.error(error.message);
-                    errorCount++;
                     showMessage(`Lỗi tải file: ${file.name}. Vui lòng kiểm tra định dạng/cấu trúc.`, 'error');
                 }
             }
@@ -744,15 +865,23 @@
                 showMessage("Không tìm thấy dữ liệu hợp lệ nào từ các file đã chọn.", 'error');
                 return;
             }
+            
+            let dataBeforeNormalize = shouldAppend ? quizData : [];
+            
+            const { newValidQuestions } = normalizeData(combinedRawData, dataBeforeNormalize);
 
-            const { validQuestionCount } = normalizeData(combinedRawData);
-
-            if (validQuestionCount === 0) {
+            if (newValidQuestions === 0 && quizData.length === 0) {
                  showMessage(`Đã đọc ${totalInitialRowCount} dòng dữ liệu từ ${files.length} file, nhưng không tìm thấy câu hỏi hợp lệ nào.`, 'error');
                 return;
             }
+
+            if (shouldAppend) {
+                 showMessage(`Đã gộp thành công ${newValidQuestions} câu hỏi mới. Tổng cộng: ${quizData.length} câu.`, 'success');
+            } else {
+                 showMessage(`Đã tải thành công ${newValidQuestions} câu hỏi từ ${files.length} file.`, 'success');
+            }
             
-            showMessage(`Đã tải thành công ${validQuestionCount} câu hỏi từ ${files.length} file.`, 'success');
+            // Render và lưu dữ liệu mới
             renderQuiz();
         }
 
@@ -761,12 +890,14 @@
         /**
          * Xử lý sự kiện tải file CSV/Excel (Hỗ trợ nhiều file)
          */
-        async function handleFileUpload(event) {
-            const files = event.target.files;
-            if (files.length === 0) return;
-
-            // Xử lý danh sách file
-            processFiles(files);
+        function handleFileUpload(event) {
+            // Nếu đang ở Upload View (Upload lần đầu), thay thế dữ liệu
+            const shouldAppend = currentViewState === STATE.QUIZ;
+            
+            processFiles(event.target.files, shouldAppend);
+            
+            // Xóa file khỏi input để có thể chọn lại cùng một file (cần cho nút gộp)
+            event.target.value = null;
         }
 
         /**
@@ -787,23 +918,54 @@
             quizData = [];
             userAnswers = {};
             revealedAnswers = {};
+            localStorage.removeItem(LOCAL_STORAGE_KEY); // Xóa dữ liệu đã lưu
             fileInput.value = ''; // Reset input file
             setViewState(STATE.UPLOAD);
         }
 
+        /**
+         * Xử lý nút "Tải/Gộp thêm Dữ liệu"
+         */
+        function handleAddMoreDataClick() {
+            // Kích hoạt input file ẩn
+            fileInput.click();
+        }
+
 
         // --- INITIALIZATION ---
-        function init() {
+        async function init() {
+            // --- Gắn sự kiện ---
             fileInput.addEventListener('change', handleFileUpload);
             submitButton.addEventListener('click', handleSubmitQuiz);
             restartButton.addEventListener('click', handleRestartQuiz);
+            addMoreDataButton.addEventListener('click', handleAddMoreDataClick); // Nút Gộp/Tải thêm
             
-            // Gắn sự kiện cho ô tìm kiếm
             if (searchInput) {
                  searchInput.addEventListener('input', filterQuestions);
             }
-            
-            setViewState(STATE.UPLOAD); 
+
+            // --- Tự động tải dữ liệu đã lưu (Ưu tiên 1) ---
+            const loadedData = loadQuizData();
+
+            if (loadedData.length > 0) {
+                // Tái tạo lại dữ liệu quizData, userAnswers, và revealedAnswers
+                quizData = loadedData;
+                quizData.forEach(q => {
+                    userAnswers[q.id] = q.isMultiSelect ? [] : null; 
+                    revealedAnswers[q.id] = q.revealed || false; // Khôi phục trạng thái đã xem
+                });
+                
+                showMessage(`Tải thành công ${quizData.length} câu hỏi từ dữ liệu đã lưu.`, 'success');
+                renderQuiz();
+            } else {
+                // --- Tải từ máy chủ (Ưu tiên 2) ---
+                const success = await fetchRemoteData();
+                
+                if (!success) {
+                    // Nếu cả hai đều thất bại, hiển thị giao diện tải lên thủ công
+                    setViewState(STATE.UPLOAD);
+                }
+            }
         }
 
         window.onload = init;
