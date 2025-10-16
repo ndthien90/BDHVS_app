@@ -49,39 +49,6 @@
         .quiz-revealed .choice-btn {
             pointer-events: none; /* Vô hiệu hóa tất cả các lựa chọn khi ở chế độ Revealed */
         }
-        
-        /* Cần thiết lập lại độ rộng tối đa cho container chính để phù hợp với sidebar */
-        .main-container-wrapper {
-             max-width: 80rem; /* Tăng từ 4xl (56rem) lên 80rem */
-             margin: 0 auto;
-             padding: 1rem;
-        }
-        
-        /* Ẩn nút hiện đáp án chung khi đã có nút cho từng câu */
-        .quiz-view-controls {
-            display: flex; /* Đảm bảo vẫn hiển thị các nút còn lại */
-        }
-        
-        /* MỚI: CSS cho trạng thái đóng/mở Navigation Panel trên mobile */
-        @media (max-width: 1023px) { /* Up to lg breakpoint */
-            #nav-wrapper.is-open {
-                transform: translateX(0);
-            }
-            #backdrop.is-open {
-                display: block;
-            }
-        }
-        
-        /* MỚI: Style cho nút micrô khi đang nghe */
-        .mic-btn.listening {
-            animation: pulse 1s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-        }
     </style>
 </head>
 <body class="min-h-screen">
@@ -89,8 +56,7 @@
     <!-- Message Box -->
     <div id="message-box" role="alert"></div>
 
-    <!-- Tăng độ rộng tối đa của container chính -->
-    <div class="main-container-wrapper p-4 sm:p-6 lg:p-8">
+    <div class="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
         <header class="text-center mb-8">
             <h1 class="text-3xl font-extrabold text-gray-900 mb-2">Ứng Dụng Tạo Đề Thi Trắc Nghiệm</h1>
             <p class="text-gray-600">Hỗ trợ tải đề thi từ file Excel/CSV. Đã tối ưu hiệu suất cho dữ liệu lớn.</p>
@@ -110,22 +76,13 @@
         // Trạng thái chung của ứng dụng
         let quizData = []; // Dữ liệu câu hỏi gốc từ file
         let userAnswers = {}; // { index: [selectedChoiceIndex, ...] } - Hỗ trợ Multi-Choice
-        let revealedAnswers = {}; 
-        let isPracticeMode = false; 
+        let revealedAnswers = {}; // { index: true } - Cờ để hiển thị đáp án đúng sau khi nộp bài
+        let isPracticeMode = false; // TRẠNG THÁI: Hiển thị đáp án đúng ngay lập tức (Chế độ Ôn tập)
         
         // Trạng thái cho tối ưu hiệu suất (Pagination & Filtering)
         let currentPage = 1;
         const questionsPerPage = 50; // Số câu hỏi hiển thị mỗi trang
         let filteredQuizData = []; // Dữ liệu đã được lọc/tìm kiếm
-        
-        // Trạng thái hiển thị Nav Panel trên mobile
-        let isNavOpen = false; 
-        let touchstartX = 0; // Dùng cho Swipe Gesture
-        let touchendX = 0; // Dùng cho Swipe Gesture
-        
-        // MỚI: Biến cho Speech Recognition
-        let recognition = null; 
-        let isListening = false;
         
         // --- DOM REFERENCES ---
         const mainContent = document.getElementById('main-content');
@@ -139,7 +96,6 @@
         let quizContainer;
         let paginationContainer;
         let practiceModeButton;
-        let questionNavContainer; // MỚI: Container cho các nút điều hướng
 
         // --- ENUMS & CONSTANTS ---
         const STATE = {
@@ -147,183 +103,6 @@
             QUIZ: 'quiz',
             RESULT: 'result'
         };
-
-        // --- GLOBAL HELPER FUNCTIONS (CẦN CHO INLINE ONCLICK) ---
-
-        /**
-         * Điều hướng đến một câu hỏi cụ thể (theo chỉ mục toàn cục)
-         * Phải nằm ngoài hàm init() để có thể dùng trong inline onclick
-         */
-        function goToQuestion(globalIndex) {
-            const targetQuestionNumber = globalIndex + 1;
-            const targetPage = Math.ceil(targetQuestionNumber / questionsPerPage);
-            
-            // Đóng Nav Panel nếu đang mở (trên mobile)
-            toggleNavigationPanel(false); 
-            
-            // Xóa trạng thái tìm kiếm nếu người dùng điều hướng trực tiếp
-            if (searchInput && searchInput.value) {
-                searchInput.value = '';
-                filterQuestions();
-            }
-
-            if (targetPage !== currentPage) {
-                // Nếu câu hỏi nằm ở trang khác, chuyển trang và sau đó cuộn
-                currentPage = targetPage;
-                renderQuiz(); 
-                
-                // Sử dụng setTimeout để đảm bảo DOM đã được cập nhật trước khi cuộn
-                setTimeout(() => {
-                    document.getElementById(`question-${targetQuestionNumber}`)?.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'center' // Cuộn câu hỏi vào giữa màn hình
-                    });
-                }, 50);
-
-            } else {
-                // Nếu câu hỏi ở trang hiện tại, chỉ cần cuộn
-                document.getElementById(`question-${targetQuestionNumber}`)?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center'
-                });
-            }
-        }
-        
-        /**
-         * Xử lý sự kiện xem/ẩn đáp án cho một câu hỏi cụ thể
-         * @param {number} globalIndex - Chỉ mục toàn cục của câu hỏi
-         */
-        function toggleSingleAnswer(globalIndex) {
-            // Đảo ngược trạng thái revealedAnswers cho câu hỏi này
-            if (revealedAnswers[globalIndex]) {
-                delete revealedAnswers[globalIndex];
-            } else {
-                revealedAnswers[globalIndex] = true;
-            }
-            
-            // Cần tìm và render lại chỉ câu hỏi này (nếu đang hiển thị) hoặc render lại toàn bộ trang
-            renderQuiz(); 
-            // Nếu bạn muốn cuộn đến câu hỏi sau khi bật/tắt đáp án:
-            setTimeout(() => {
-                document.getElementById(`question-${globalIndex + 1}`)?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start'
-                });
-            }, 50);
-
-        }
-        
-        /**
-         * Quản lý trạng thái đóng/mở Bảng Điều Hướng trên Mobile
-         */
-        function toggleNavigationPanel(forceState = null) {
-            const navWrapper = document.getElementById('nav-wrapper');
-            const backdrop = document.getElementById('backdrop');
-
-            if (!navWrapper || !backdrop || window.innerWidth >= 1024) return; // Chỉ chạy trên mobile
-
-            isNavOpen = forceState !== null ? forceState : !isNavOpen;
-
-            if (isNavOpen) {
-                navWrapper.classList.add('is-open');
-                backdrop.classList.add('is-open');
-            } else {
-                navWrapper.classList.remove('is-open');
-                backdrop.classList.remove('is-open');
-            }
-
-            // Cập nhật text của nút toggle (được gọi sau đó trong renderQuiz hoặc handleAnswerSelection)
-        }
-
-        /**
-         * Cập nhật văn bản trên nút mở điều hướng
-         */
-        function updateNavToggleText() {
-            const navToggleBtn = document.getElementById('nav-toggle-btn');
-            if (navToggleBtn) {
-                const answeredCount = Object.keys(userAnswers).length;
-                const totalCount = quizData.length;
-                navToggleBtn.innerHTML = `
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
-                    </svg>
-                    Điều Hướng (Tiến độ: ${answeredCount}/${totalCount})
-                `;
-            }
-        }
-
-        // --- MỚI: SPEECH RECOGNITION FUNCTIONS ---
-        
-        /**
-         * Khởi tạo Speech Recognition
-         */
-        function setupSpeechRecognition() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                showMessage("Trình duyệt không hỗ trợ Web Speech API.", 'error');
-                return null;
-            }
-
-            recognition = new SpeechRecognition();
-            recognition.continuous = false; // Chỉ nhận diện một lần
-            recognition.lang = 'vi-VN';    // Ngôn ngữ Tiếng Việt
-            recognition.interimResults = false; // Chỉ trả về kết quả cuối cùng
-
-            const micButton = document.getElementById('mic-button');
-
-            recognition.onstart = function() {
-                isListening = true;
-                if (micButton) micButton.classList.add('listening');
-                showMessage("Bắt đầu nghe... Hãy nói từ khóa tìm kiếm.", 'info');
-            };
-
-            recognition.onresult = function(event) {
-                const transcript = event.results[0][0].transcript;
-                if (searchInput) {
-                    searchInput.value = transcript;
-                    // Kích hoạt tìm kiếm sau khi nhập liệu bằng giọng nói
-                    filterQuestions(); 
-                }
-            };
-
-            recognition.onerror = function(event) {
-                isListening = false;
-                if (micButton) micButton.classList.remove('listening');
-                console.error("Lỗi nhận diện giọng nói:", event.error);
-                if (event.error !== 'no-speech' && event.error !== 'aborted') {
-                    showMessage(`Lỗi nhận diện: ${event.error}. Vui lòng thử lại.`, 'error');
-                }
-            };
-
-            recognition.onend = function() {
-                isListening = false;
-                if (micButton) micButton.classList.remove('listening');
-                showMessage("Đã kết thúc nghe.", 'info');
-            };
-
-            return recognition;
-        }
-
-        /**
-         * Bật/Tắt chức năng nhập liệu bằng giọng nói
-         */
-        function toggleSpeechInput() {
-            if (!recognition) {
-                recognition = setupSpeechRecognition();
-                if (!recognition) return;
-            }
-
-            if (isListening) {
-                recognition.stop();
-            } else {
-                try {
-                    recognition.start();
-                } catch(e) {
-                    // Xử lý lỗi nếu đang khởi động mà bị gọi lại
-                    console.error("Lỗi khi gọi start:", e);
-                }
-            }
-        }
 
         // --- UTILITY FUNCTIONS ---
         
@@ -454,7 +233,7 @@
             });
         }
 
-        // --- LOCAL STORAGE FUNCTIONS ---
+        // --- LOCAL STORAGE FUNCTIONS (MỚI) ---
 
         /**
          * Lưu dữ liệu đề thi vào localStorage
@@ -555,89 +334,37 @@
         }
 
         /**
-         * Render giao diện làm bài thi (ĐÃ CẬP NHẬT: Thêm nút Micrô)
+         * Render giao diện làm bài thi
          */
         function renderQuizView() {
             mainContent.innerHTML = `
-                <div class="relative flex flex-col lg:flex-row gap-6">
-                    
-                    <!-- Backdrop (visible on mobile when nav is open) -->
-                    <div id="backdrop" class="hidden fixed inset-0 z-30 bg-black bg-opacity-50 lg:hidden" onclick="toggleNavigationPanel(false)"></div>
-
-                    <!-- Navigation Panel -->
-                    <div id="nav-wrapper" class="transition-transform duration-300 ease-in-out 
-                                                 fixed inset-y-0 left-0 z-40 w-64 md:w-80 
-                                                 lg:static lg:w-1/4 lg:order-1 lg:h-auto 
-                                                 bg-gray-100 lg:bg-transparent 
-                                                 -translate-x-full lg:translate-x-0 
-                                                 shadow-xl lg:shadow-none">
-                        <div id="navigation-panel" class="h-full overflow-y-auto p-4 bg-white 
-                                                         lg:rounded-xl shadow-lg border border-gray-100 
-                                                         lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)]">
-                            <div class="flex justify-between items-center mb-3 border-b pb-2">
-                                <p class="font-bold text-lg text-indigo-600">Điều Hướng Câu Hỏi</p>
-                                <!-- Close button on Mobile -->
-                                <button class="lg:hidden text-gray-500 hover:text-gray-900 p-1" onclick="toggleNavigationPanel(false)">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            </div>
-                            <div id="question-nav-container" class="grid grid-cols-5 gap-2 lg:grid-cols-4">
-                                <!-- Navigation buttons will be rendered here -->
-                            </div>
+                <div class="bg-white p-6 rounded-xl shadow-2xl border border-gray-100 mb-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Làm Bài Thi (Tổng: ${quizData.length} câu)</h2>
+                    <div class="mb-4 flex flex-col sm:flex-row gap-4 items-center">
+                        <input type="text" id="search-input" placeholder="Tìm kiếm câu hỏi hoặc đáp án..."
+                            class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 w-full sm:w-auto"
+                        />
+                        <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                             <button id="practice-mode-btn"
+                                class="px-4 py-2 bg-yellow-500 text-white font-semibold rounded-lg hover:bg-yellow-600 transition duration-150 shadow-md flex-grow">
+                                Hiện Đáp Án (Ôn tập)
+                            </button>
+                            <button id="submit-quiz"
+                                class="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-150 shadow-md flex-grow">
+                                Nộp Bài & Chấm Điểm
+                            </button>
                         </div>
                     </div>
+                </div>
+                
+                <!-- Vùng chứa các câu hỏi đã được phân trang -->
+                <div id="quiz-container" class="space-y-6 mb-6">
+                    <!-- Questions will be rendered here -->
+                </div>
 
-                    <!-- Main Quiz Content (Wider on desktop) -->
-                    <div id="quiz-main-content" class="lg:w-3/4 lg:order-2 w-full">
-                        <div class="bg-white p-6 rounded-xl shadow-2xl border border-gray-100 mb-6">
-                            <!-- Mobile Toggle Button -->
-                            <div class="lg:hidden mb-4">
-                                <button id="nav-toggle-btn"
-                                    class="w-full px-4 py-2 bg-blue-500 text-white font-semibold rounded-lg hover:bg-blue-600 transition duration-150 shadow-md flex items-center justify-center"
-                                    onclick="toggleNavigationPanel(true)">
-                                    <!-- Content will be set by JS: updateNavToggleText() -->
-                                </button>
-                            </div>
-
-                            <h2 class="text-xl font-bold text-gray-800 mb-4">Làm Bài Thi (Tổng: ${quizData.length} câu)</h2>
-                            <div class="mb-4 quiz-view-controls flex flex-col sm:flex-row gap-4 items-center">
-                                <!-- Search Input Group -->
-                                <div class="relative flex-grow w-full sm:w-auto">
-                                    <input type="text" id="search-input" placeholder="Tìm kiếm câu hỏi hoặc đáp án..."
-                                        class="flex-grow p-2 pr-10 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 w-full"
-                                    />
-                                    <button id="mic-button" onclick="toggleSpeechInput()"
-                                        class="mic-btn absolute right-0 top-0 h-full w-10 flex items-center justify-center text-gray-500 hover:text-red-500 rounded-r-lg transition duration-150 focus:outline-none"
-                                        title="Tìm kiếm bằng giọng nói">
-                                        <!-- Mic SVG Icon -->
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4z" clip-rule="evenodd" />
-                                            <path fill-rule="evenodd" d="M11.5 13a4.5 4.5 0 01-9 0V9a.5.5 0 011 0v4a3.5 3.5 0 007 0V9a.5.5 0 011 0v4zM10 18a.5.5 0 01-.5-.5v-2a.5.5 0 011 0v2a.5.5 0 01-.5.5z" clip-rule="evenodd" />
-                                        </svg>
-                                    </button>
-                                </div>
-                                
-                                <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                                    <button id="submit-quiz"
-                                        class="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-150 shadow-md flex-grow">
-                                        Nộp Bài & Chấm Điểm
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Vùng chứa các câu hỏi đã được phân trang -->
-                        <div id="quiz-container" class="space-y-6 mb-6">
-                            <!-- Questions will be rendered here -->
-                        </div>
-
-                        <!-- Vùng chứa thanh phân trang -->
-                        <div id="pagination-container" class="flex justify-center items-center space-x-2 my-8">
-                            <!-- Pagination buttons will be rendered here -->
-                        </div>
-                    </div>
+                <!-- Vùng chứa thanh phân trang -->
+                <div id="pagination-container" class="flex justify-center items-center space-x-2 my-8">
+                    <!-- Pagination buttons will be rendered here -->
                 </div>
             `;
             
@@ -646,59 +373,18 @@
             searchInput = document.getElementById('search-input');
             quizContainer = document.getElementById('quiz-container');
             paginationContainer = document.getElementById('pagination-container');
-            questionNavContainer = document.getElementById('question-nav-container'); 
+            practiceModeButton = document.getElementById('practice-mode-btn');
 
             submitButton.addEventListener('click', handleSubmitQuiz);
+            practiceModeButton.addEventListener('click', togglePracticeMode); // Gắn sự kiện cho nút mới
             
             // Gắn sự kiện tìm kiếm với Debounce để tối ưu hiệu suất
             if (searchInput) {
                 const debouncedFilter = debounce(filterQuestions, 300);
                 searchInput.addEventListener('input', debouncedFilter);
             }
-            
-            // MỚI: Render các nút điều hướng lần đầu
-            renderQuestionNavigation();
-            // MỚI: Cập nhật text cho nút toggle
-            updateNavToggleText();
-            
-            // MỚI: Khởi tạo Speech Recognition
-            setupSpeechRecognition(); 
         }
         
-        /**
-         * Render các nút điều hướng câu hỏi (1, 2, 3, ...)
-         */
-        function renderQuestionNavigation() {
-            const navContainer = document.getElementById('question-nav-container');
-            if (!navContainer) return;
-
-            let html = '';
-            
-            // Lặp qua toàn bộ quizData để tạo nút cho TẤT CẢ câu hỏi
-            for (let i = 0; i < quizData.length; i++) {
-                const questionNumber = i + 1;
-                // Kiểm tra xem câu hỏi đã được trả lời chưa
-                const isAnswered = userAnswers[i] && userAnswers[i].length > 0;
-                
-                // Thêm class 'answered' nếu câu hỏi đã được trả lời
-                const answeredClass = isAnswered 
-                    ? 'bg-green-200 border-green-500 text-green-800 hover:bg-green-300 font-semibold' 
-                    : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-blue-100';
-
-                html += `
-                    <button 
-                        data-index="${i}" 
-                        onclick="goToQuestion(${i})" 
-                        class="p-1 rounded-lg border text-sm transition duration-150 shadow-sm ${answeredClass}">
-                        ${questionNumber}
-                    </button>
-                `;
-            }
-
-            navContainer.innerHTML = html;
-        }
-
-
         /**
          * Render các nút phân trang
          */
@@ -795,9 +481,6 @@
             } else if (filteredQuizData.length === 0) {
                  quizContainer.innerHTML = `<div class="text-center py-12 text-gray-500 text-lg font-medium">Không tìm thấy câu hỏi nào.</div>`;
                  renderPaginationControls(0, 0);
-                 // MỚI: Cập nhật điều hướng ngay cả khi trống
-                 renderQuestionNavigation();
-                 updateNavToggleText();
                  return;
             }
 
@@ -807,8 +490,8 @@
             for (const [i, q] of paginatedQuestions.entries()) {
                 // Chỉ mục toàn cục (để lấy đáp án từ userAnswers và revealedAnswers)
                 const globalIndex = quizData.indexOf(q); 
-                // CHỈ SỬ DỤNG revealedAnswers[globalIndex]
-                const isRevealed = revealedAnswers[globalIndex]; 
+                // Sử dụng cờ revealedAnswers (sau khi nộp bài) HOẶC cờ isPracticeMode (chế độ ôn tập)
+                const isRevealed = revealedAnswers[globalIndex] || isPracticeMode; 
                 // userAnswers[globalIndex] giờ là MẢNG các lựa chọn
                 const selectedIndices = userAnswers[globalIndex]; 
                 const questionNumber = globalIndex + 1;
@@ -821,25 +504,120 @@
 
             // Gắn lại sự kiện chọn đáp án sau khi render
             document.querySelectorAll('.choice-btn').forEach(button => {
-                // Đảm bảo không ở chế độ kết quả (RESULT)
-                if (mainContent.querySelector('#submit-quiz')) {
+                // Chỉ gắn sự kiện nếu KHÔNG ở chế độ ôn tập
+                if (!isPracticeMode) { 
                     button.addEventListener('click', handleAnswerSelection);
-                } else {
-                    button.classList.add('pointer-events-none');
                 }
             });
             
+            // Cập nhật trạng thái hiển thị của nút
+            updatePracticeModeButton();
+
             // Render lại thanh phân trang
             renderPaginationControls(totalPages, currentPage);
-            
-            // MỚI: Cập nhật lại trạng thái các nút điều hướng (Đã trả lời/Chưa trả lời)
-            renderQuestionNavigation(); 
-            // MỚI: Cập nhật text cho nút toggle (Tiến độ)
-            updateNavToggleText();
         }
 
         /**
-         * Tạo HTML cho một câu hỏi (card) - ĐÃ CẬP NHẬT: Thêm nút hiện đáp án riêng
+         * Cập nhật văn bản và màu sắc của nút Chế độ Ôn tập
+         */
+        function updatePracticeModeButton() {
+            if (practiceModeButton) {
+                if (isPracticeMode) {
+                    practiceModeButton.textContent = 'Ẩn Đáp Án (Tiếp tục làm bài)';
+                    practiceModeButton.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+                    practiceModeButton.classList.add('bg-gray-500', 'hover:bg-gray-600');
+                    // Thêm class lên container để vô hiệu hóa input
+                    if (quizContainer) quizContainer.classList.add('quiz-revealed');
+                } else {
+                    practiceModeButton.textContent = 'Hiện Đáp Án (Chế độ Ôn tập)';
+                    practiceModeButton.classList.remove('bg-gray-500', 'hover:bg-gray-600');
+                    practiceModeButton.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
+                    // Xóa class để cho phép input
+                    if (quizContainer) quizContainer.classList.remove('quiz-revealed');
+                }
+            }
+        }
+
+        /**
+         * Chuyển đổi giữa chế độ làm bài và chế độ ôn tập (hiện đáp án)
+         */
+        function togglePracticeMode() {
+            isPracticeMode = !isPracticeMode;
+            renderQuiz(); // Render lại các câu hỏi để áp dụng style mới
+            showMessage(isPracticeMode ? "Đã chuyển sang chế độ Ôn tập (Đáp án đúng được hiển thị)." : "Đã quay lại chế độ làm bài bình thường.", 'info');
+        }
+
+        /**
+         * Render giao diện kết quả
+         */
+        function renderResultsView() {
+            // Đảm bảo chế độ ôn tập được tắt khi nộp bài
+            isPracticeMode = false;
+
+            const total = quizData.length;
+            let correctCount = 0;
+            
+            // Tính điểm (ĐÃ CẬP NHẬT CHO MCQ)
+            for (let i = 0; i < total; i++) {
+                const q = quizData[i];
+                // Lấy đáp án của người dùng (mảng, có thể là undefined/null)
+                const userAns = userAnswers[i] || [];
+                
+                // Lấy đáp án đúng (mảng)
+                const correctAns = q.correctAnswerIndices;
+
+                // So sánh: Đúng nếu mảng lựa chọn của người dùng trùng khớp hoàn toàn với mảng đáp án đúng
+                if (arraysEqual(userAns, correctAns)) {
+                    correctCount++;
+                }
+            }
+
+            const score = ((correctCount / total) * 10).toFixed(2);
+
+            mainContent.innerHTML = `
+                <div class="bg-white p-8 rounded-xl shadow-2xl text-center border border-gray-100">
+                    <h2 class="text-3xl font-bold mb-4 text-gray-800">KẾT QUẢ BÀI THI</h2>
+                    <div class="space-y-4">
+                        <p class="text-lg text-gray-700">Tổng số câu hỏi: <span class="font-extrabold text-indigo-600">${total}</span></p>
+                        <p class="text-2xl text-gray-700">Số câu trả lời đúng: <span class="font-extrabold text-green-600">${correctCount}</span></p>
+                        <p class="text-4xl font-extrabold p-4 rounded-xl bg-blue-50 text-blue-800 shadow-inner">ĐIỂM: ${score}/10</p>
+                    </div>
+
+                    <p class="text-gray-600 mt-6">Bạn có thể xem lại đáp án và câu trả lời của mình bên dưới.</p>
+                    
+                    <button id="restart-quiz"
+                        class="mt-8 px-8 py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition duration-150 shadow-md">
+                        Làm Bài Thi Mới
+                    </button>
+                    
+                    <button id="view-answers"
+                        class="mt-8 ml-4 px-8 py-3 bg-teal-600 text-white font-semibold rounded-lg hover:bg-teal-700 transition duration-150 shadow-md">
+                        Xem lại đáp án
+                    </button>
+                </div>
+                
+                <!-- Vùng chứa các câu hỏi và đáp án -->
+                <div id="result-quiz-container" class="space-y-6 mt-8">
+                    <!-- Questions will be rendered here for review -->
+                </div>
+            `;
+            
+            // Cập nhật DOM references và gắn sự kiện
+            restartButton = document.getElementById('restart-quiz');
+            const viewAnswersButton = document.getElementById('view-answers');
+            quizContainer = document.getElementById('result-quiz-container');
+
+            restartButton.addEventListener('click', handleRestartQuiz);
+            viewAnswersButton.addEventListener('click', handleReviewAnswers);
+            
+            // Mặc định hiển thị lại các câu hỏi đã làm
+            handleReviewAnswers();
+        }
+
+        // --- CORE LOGIC ---
+
+        /**
+         * Tạo HTML cho một câu hỏi (card) - ĐÃ CẬP NHẬT ĐỂ HỖ TRỢ 10 ĐÁP ÁN
          */
         function quizHTML(questionNumber, q, globalIndex, selectedIndices, isRevealed) {
             const correctAnswerIndices = q.correctAnswerIndices || [];
@@ -863,8 +641,7 @@
                         classes = 'correct-choice p-3 rounded-lg border-2 text-left shadow-md pointer-events-none';
                     } 
                     // 2. Highlight đáp án SAI mà người dùng đã chọn (chỉ áp dụng khi nộp bài)
-                    // Chỉ áp dụng khi đã nộp bài (không có nút submit quiz)
-                    else if (isSelectedByUser && !mainContent.querySelector('#submit-quiz')) {
+                    else if (isSelectedByUser && revealedAnswers[globalIndex]) {
                         classes = 'bg-red-100 border-red-500 font-medium p-3 rounded-lg border-2 text-left shadow-sm pointer-events-none';
                     } 
                     // 3. Đáp án không đúng, không chọn
@@ -890,43 +667,18 @@
                     </button>
                 `;
             }).join('');
-            
-            const questionId = `question-${questionNumber}`;
-            
-            // Xây dựng nút hiện/ẩn đáp án riêng
-            let answerButtonHtml = '';
-            // Chỉ hiển thị nút này khi ở chế độ làm bài (trước khi nộp bài)
-            if (mainContent.querySelector('#submit-quiz')) {
-                const buttonText = isRevealed ? 'Ẩn Đáp Án' : 'Xem Đáp Án';
-                const buttonClass = isRevealed 
-                    ? 'bg-gray-500 hover:bg-gray-600' 
-                    : 'bg-yellow-500 hover:bg-yellow-600';
-                    
-                answerButtonHtml = `
-                    <div class="mt-4 pt-4 border-t border-gray-100 flex justify-end">
-                        <button onclick="toggleSingleAnswer(${globalIndex})" 
-                            class="px-3 py-1 text-sm ${buttonClass} text-white font-semibold rounded-lg transition duration-150 shadow-md">
-                            ${buttonText}
-                        </button>
-                    </div>
-                `;
-            }
-
 
             return `
-                <div id="${questionId}" class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+                <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
                     <p class="text-lg font-semibold text-gray-800 mb-3">
                         <span class="text-indigo-600 mr-2">Câu ${questionNumber}:</span> ${q.question}
                     </p>
                     <div class="flex flex-col space-y-3">
                         ${choicesHtml}
                     </div>
-                    ${answerButtonHtml}
                 </div>
             `;
         }
-
-        // CÁC HÀM KHÁC (GIỮ NGUYÊN)
         
         /**
          * Xử lý lọc câu hỏi (sử dụng Debounce)
@@ -966,6 +718,9 @@
          * Xử lý sự kiện chọn đáp án (ĐÃ CẬP NHẬT CHO MCQ)
          */
         function handleAnswerSelection(event) {
+            // Nếu đang ở chế độ ôn tập thì không làm gì
+            if (isPracticeMode) return; 
+
             const button = event.currentTarget;
             const globalIndex = parseInt(button.dataset.index, 10);
             const value = parseInt(button.dataset.value, 10);
@@ -997,20 +752,6 @@
                 // Loại bỏ trường hợp mảng rỗng
                 delete userAnswers[globalIndex];
             }
-            
-            // Cập nhật lại trạng thái của nút điều hướng cho câu hỏi này
-            const navButton = document.querySelector(`#question-nav-container button[data-index="${globalIndex}"]`);
-            if (navButton) {
-                if (currentSelections.length > 0) {
-                     navButton.classList.add('bg-green-200', 'border-green-500', 'text-green-800', 'font-semibold', 'hover:bg-green-300');
-                     navButton.classList.remove('bg-gray-100', 'border-gray-300', 'text-gray-700', 'hover:bg-blue-100');
-                } else {
-                     navButton.classList.remove('bg-green-200', 'border-green-500', 'text-green-800', 'font-semibold', 'hover:bg-green-300');
-                     navButton.classList.add('bg-gray-100', 'border-gray-300', 'text-gray-700', 'hover:bg-blue-100');
-                }
-            }
-            // MỚI: Cập nhật text trên nút điều hướng mobile
-            updateNavToggleText();
         }
 
         /**
@@ -1067,8 +808,6 @@
                 showMessage("Vui lòng tải lên file đề thi trước.", 'info');
                 return;
             }
-            // Đảm bảo revealedAnswers được reset cho chế độ kết quả
-            revealedAnswers = {};
             renderResults();
         }
 
@@ -1097,10 +836,8 @@
             // Đặt lại dữ liệu lọc/phân trang để hiển thị tất cả câu hỏi đã chấm
             filteredQuizData = [...quizData];
             currentPage = 1;
-            // Ở chế độ kết quả, tất cả câu hỏi phải được đánh dấu là revealed
-            quizData.forEach((q, index) => {
-                revealedAnswers[index] = true;
-            });
+            // Đảm bảo ở chế độ kết quả, các câu hỏi luôn hiển thị đáp án
+            isPracticeMode = false; 
             renderQuiz(); 
             // Cập nhật tiêu đề
             const titleElement = document.querySelector('.bg-white.p-8.rounded-xl').nextElementSibling;
@@ -1111,44 +848,7 @@
 
 
         // --- INITIALIZATION ---
-        
-        /**
-         * MỚI: Xử lý cử chỉ vuốt trên mobile
-         */
-        function handleGesture() {
-            // Chỉ kích hoạt trên mobile (width < 1024px)
-            if (window.innerWidth >= 1024) return; 
-
-            const swipeDistance = touchendX - touchstartX;
-            
-            // Swipe Right (Show panel): distance > 50px, bắt đầu từ sát lề trái (<= 50px)
-            if (swipeDistance > 50 && touchstartX < 50) {
-                toggleNavigationPanel(true);
-            }
-            // Swipe Left (Hide panel): distance < -50px, panel đang mở
-            else if (swipeDistance < -50 && isNavOpen) {
-                toggleNavigationPanel(false);
-            }
-        }
-
         function init() {
-            // === THIẾT LẬP TOUCH HANDLERS CHO CỬ CHỈ VUỐT ===
-            document.addEventListener('touchstart', e => {
-                if (window.innerWidth < 1024) {
-                    // Chỉ lấy touch đầu tiên
-                    touchstartX = e.changedTouches[0].screenX; 
-                }
-            }, false);
-
-            document.addEventListener('touchend', e => {
-                if (window.innerWidth < 1024) {
-                    // Chỉ lấy touch đầu tiên
-                    touchendX = e.changedTouches[0].screenX;
-                    handleGesture();
-                }
-            }, false);
-            // === END TOUCH HANDLERS ===
-            
             // === TẢI DỮ LIỆU ĐÃ LƯU VÀO TRẠNG THÁI (MỚI) ===
             const hasLoadedData = loadQuizData();
 
